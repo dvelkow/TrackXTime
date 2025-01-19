@@ -22,9 +22,8 @@ class TimeTracker:
         
         # Initialize data file
         self.data_file = "time_records.json"
-        self.load_data()
         
-        # Initialize state variables
+        # Initialize state variables with default values
         self.current_state = "clocked_out"
         self.clock_in_time = None
         self.break_start_time = None
@@ -32,22 +31,64 @@ class TimeTracker:
         self.today_worked_time = timedelta()
         self.hours_left = timedelta(hours=16)
         
+        # Load data and state
+        self.load_data()
+        
         self.setup_ui()
         self.update_time_display()
         self.check_new_date()
+        
+        # Bind window closing event
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
     def load_data(self):
-        """Load time records from JSON file"""
+        """Load time records and current state from JSON file"""
         if os.path.exists(self.data_file):
             with open(self.data_file, 'r') as f:
-                self.time_records = json.load(f)
+                data = json.load(f)
+                self.time_records = data.get('records', {})
+                
+                # Load state
+                state_data = data.get('current_state', {})
+                if state_data:
+                    self.current_state = state_data.get('state', 'clocked_out')
+                    
+                    # Convert stored times back to datetime objects
+                    clock_in_str = state_data.get('clock_in_time')
+                    self.clock_in_time = datetime.fromisoformat(clock_in_str) if clock_in_str else None
+                    
+                    break_start_str = state_data.get('break_start_time')
+                    self.break_start_time = datetime.fromisoformat(break_start_str) if break_start_str else None
+                    
+                    # Convert stored timedeltas back to timedelta objects
+                    total_break_seconds = state_data.get('total_break_time', 0)
+                    self.total_break_time = timedelta(seconds=total_break_seconds)
+                    
+                    hours_left_seconds = state_data.get('hours_left', 57600)  # Default to 16 hours in seconds
+                    self.hours_left = timedelta(seconds=hours_left_seconds)
         else:
             self.time_records = {}
     
     def save_data(self):
-        """Save time records to JSON file"""
+        """Save time records and current state to JSON file"""
+        # Prepare state data
+        state_data = {
+            'state': self.current_state,
+            'clock_in_time': self.clock_in_time.isoformat() if self.clock_in_time else None,
+            'break_start_time': self.break_start_time.isoformat() if self.break_start_time else None,
+            'total_break_time': self.total_break_time.total_seconds(),
+            'hours_left': self.hours_left.total_seconds()
+        }
+        
+        # Combine records and state
+        data = {
+            'records': self.time_records,
+            'current_state': state_data
+        }
+        
+        # Save to file
         with open(self.data_file, 'w') as f:
-            json.dump(self.time_records, f, indent=4)
+            json.dump(data, f, indent=4)
     
     def format_timedelta(self, td):
         """Convert timedelta to hours and minutes format"""
@@ -107,7 +148,7 @@ class TimeTracker:
         
         # Status display
         self.status_label = ttk.Label(center_frame,
-                                     text="Status: Clocked Out",
+                                     text=f"Status: {self.current_state.replace('_', ' ').title()}",
                                      style="Status.TLabel")
         self.status_label.pack(pady=20)
         
@@ -133,12 +174,12 @@ class TimeTracker:
         """Setup the control buttons"""
         # First row
         self.clock_in_btn = MinimalButton(button_frame,
-                                        text="Clock In",
+                                        text="Lock In",
                                         command=self.clock_in)
         self.clock_in_btn.grid(row=0, column=0, padx=20, pady=20)
         
         self.clock_out_btn = MinimalButton(button_frame,
-                                         text="Clock Out",
+                                         text="Lock Out",
                                          command=self.clock_out)
         self.clock_out_btn.grid(row=0, column=1, padx=20, pady=20)
         
@@ -168,6 +209,9 @@ class TimeTracker:
             
             self.time_label.config(text=self.format_timedelta(worked_time))
             self.hours_left_label.config(text=f"{self.format_timedelta(self.hours_left)} left")
+            
+            # Save state periodically
+            self.save_data()
         
         # Schedule next update
         self.root.after(1000, self.update_time_display)
@@ -207,8 +251,9 @@ class TimeTracker:
         self.clock_in_time = self.get_current_time()
         self.total_break_time = timedelta()
         self.hours_left = timedelta(hours=16)  # Reset countdown
-        self.status_label.config(text="Status: Clocked In")
+        self.status_label.config(text="Status: Locked In")
         self.update_button_states()
+        self.save_data()
     
     def clock_out(self):
         """Handle clock out event"""
@@ -224,16 +269,16 @@ class TimeTracker:
                 "clock_in": self.clock_in_time.strftime("%H:%M"),
                 "clock_out": current_time.strftime("%H:%M")
             }
-            self.save_data()
         
         # Reset state
         self.current_state = "clocked_out"
         self.clock_in_time = None
         self.total_break_time = timedelta()
-        self.status_label.config(text="Status: Clocked Out")
+        self.status_label.config(text="Status: Locked Out")
         self.time_label.config(text="0h 0m")
         self.hours_left_label.config(text="16h 0m left")
         self.update_button_states()
+        self.save_data()
     
     def break_in(self):
         """Handle break start event"""
@@ -241,6 +286,7 @@ class TimeTracker:
         self.break_start_time = self.get_current_time()
         self.status_label.config(text="Status: On Break")
         self.update_button_states()
+        self.save_data()
     
     def break_out(self):
         """Handle break end event"""
@@ -250,12 +296,18 @@ class TimeTracker:
         
         self.current_state = "clocked_in"
         self.break_start_time = None
-        self.status_label.config(text="Status: Clocked In")
+        self.status_label.config(text="Status: Locked In")
         self.update_button_states()
+        self.save_data()
     
     def show_weekly_summary(self):
         """Show weekly summary window"""
         WeeklySummaryWindow(self.root, self.time_records, self.get_current_time)
+    
+    def on_closing(self):
+        """Handle window closing event"""
+        self.save_data()
+        self.root.destroy()
     
     def run(self):
         """Start the application"""
