@@ -1,10 +1,57 @@
 import tkinter as tk
 from tkinter import ttk
-from datetime import datetime, timedelta
-import json
-import pytz
-import os
-from ui_components import MinimalButton, StyleManager, WeeklySummaryWindow
+from ui_components import MinimalButton, StyleManager, WeeklySummaryWindow, TimeGoalDialog
+from time_tracker_core import TimeTrackerCore
+
+class ConfirmationDialog:
+    def __init__(self, parent):
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Confirm Lock Out")
+        
+        # Center the dialog
+        window_width = 400
+        window_height = 200
+        screen_width = self.dialog.winfo_screenwidth()
+        screen_height = self.dialog.winfo_screenheight()
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        self.dialog.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        self.dialog.configure(bg='white')
+        
+        # Make dialog modal
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Create message
+        message = ttk.Label(self.dialog,
+                          text="Are you sure you want to lock out?",
+                          style="Status.TLabel")
+        message.pack(pady=30)
+        
+        # Button frame
+        button_frame = ttk.Frame(self.dialog, style="Main.TFrame")
+        button_frame.pack(pady=20)
+        
+        # Yes button
+        self.yes_button = MinimalButton(button_frame,
+                                      text="Yes",
+                                      command=self._on_yes)
+        self.yes_button.pack(side=tk.LEFT, padx=10)
+        
+        # No button
+        self.no_button = MinimalButton(button_frame,
+                                     text="No",
+                                     command=self._on_no)
+        self.no_button.pack(side=tk.LEFT, padx=10)
+        
+        self.result = False
+    
+    def _on_yes(self):
+        self.result = True
+        self.dialog.destroy()
+    
+    def _on_no(self):
+        self.dialog.destroy()
 
 class TimeTracker:
     def __init__(self):
@@ -20,98 +67,17 @@ class TimeTracker:
         # Initialize styles
         StyleManager.setup_styles()
         
-        # Initialize data file
-        self.data_file = "time_records.json"
+        # Initialize core functionality
+        self.core = TimeTrackerCore()
         
-        # Initialize state variables with default values
-        self.current_state = "clocked_out"
-        self.clock_in_time = None
-        self.break_start_time = None
-        self.total_break_time = timedelta()
-        self.today_worked_time = timedelta()
-        self.hours_left = timedelta(hours=16)
-        
-        # Load data and state
-        self.load_data()
+        # Dark mode flag
+        self.dark_mode = False
         
         self.setup_ui()
         self.update_time_display()
-        self.check_new_date()
         
         # Bind window closing event
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-    
-    def load_data(self):
-        """Load time records and current state from JSON file"""
-        if os.path.exists(self.data_file):
-            with open(self.data_file, 'r') as f:
-                data = json.load(f)
-                self.time_records = data.get('records', {})
-                
-                # Load state
-                state_data = data.get('current_state', {})
-                if state_data:
-                    self.current_state = state_data.get('state', 'clocked_out')
-                    
-                    # Convert stored times back to datetime objects
-                    clock_in_str = state_data.get('clock_in_time')
-                    self.clock_in_time = datetime.fromisoformat(clock_in_str) if clock_in_str else None
-                    
-                    break_start_str = state_data.get('break_start_time')
-                    self.break_start_time = datetime.fromisoformat(break_start_str) if break_start_str else None
-                    
-                    # Convert stored timedeltas back to timedelta objects
-                    total_break_seconds = state_data.get('total_break_time', 0)
-                    self.total_break_time = timedelta(seconds=total_break_seconds)
-                    
-                    hours_left_seconds = state_data.get('hours_left', 57600)  # Default to 16 hours in seconds
-                    self.hours_left = timedelta(seconds=hours_left_seconds)
-        else:
-            self.time_records = {}
-    
-    def save_data(self):
-        """Save time records and current state to JSON file"""
-        # Prepare state data
-        state_data = {
-            'state': self.current_state,
-            'clock_in_time': self.clock_in_time.isoformat() if self.clock_in_time else None,
-            'break_start_time': self.break_start_time.isoformat() if self.break_start_time else None,
-            'total_break_time': self.total_break_time.total_seconds(),
-            'hours_left': self.hours_left.total_seconds()
-        }
-        
-        # Combine records and state
-        data = {
-            'records': self.time_records,
-            'current_state': state_data
-        }
-        
-        # Save to file
-        with open(self.data_file, 'w') as f:
-            json.dump(data, f, indent=4)
-    
-    def format_timedelta(self, td):
-        """Convert timedelta to hours and minutes format"""
-        total_hours = td.total_seconds() / 3600
-        hours = int(total_hours)
-        minutes = int((total_hours - hours) * 60)
-        return f"{hours}h {minutes}m"
-    
-    def get_current_time(self):
-        """Get current time in EET timezone"""
-        return datetime.now(pytz.timezone('EET'))
-    
-    def check_new_date(self):
-        """Check and initialize new date entry in records"""
-        current_date = self.get_current_time().strftime("%Y-%m-%d")
-        if current_date not in self.time_records:
-            self.time_records[current_date] = {
-                "total_time": "0h 0m",
-                "breaks": "0h 0m",
-                "clock_in": "-",
-                "clock_out": "-"
-            }
-            self.save_data()
     
     def setup_ui(self):
         """Initialize the user interface"""
@@ -129,6 +95,12 @@ class TimeTracker:
                                style="Title.TLabel")
         title_label.pack()
         
+        # Dark mode toggle button
+        self.dark_mode_button = MinimalButton(top_frame,
+                                             text="Dark Mode",
+                                             command=self.toggle_dark_mode)
+        self.dark_mode_button.pack(side=tk.RIGHT, padx=10)
+        
         # Separator
         ttk.Separator(self.main_container, orient='horizontal').pack(fill='x')
         
@@ -137,18 +109,21 @@ class TimeTracker:
         center_frame.pack(expand=True, pady=40)
         
         self.time_label = ttk.Label(center_frame,
-                                   text="0h 0m",
+                                   text="0h 0m 0s",
                                    style="Time.TLabel")
         self.time_label.pack()
         
-        self.hours_left_label = ttk.Label(center_frame,
-                                         text="16h 0m left",
-                                         style="Remaining.TLabel")
-        self.hours_left_label.pack()
+        # Make time left label clickable
+        self.time_left_label = ttk.Label(center_frame,
+                                       text=f"{self.core.format_timedelta(self.core.total_time)} left",
+                                       style="Clickable.TLabel",
+                                       cursor="hand2")
+        self.time_left_label.pack()
+        self.time_left_label.bind('<Button-1>', self.show_time_goal_dialog)
         
         # Status display
         self.status_label = ttk.Label(center_frame,
-                                     text=f"Status: {self.current_state.replace('_', ' ').title()}",
+                                     text=f"Status: {self.core.current_state.replace('_', ' ').title()}",
                                      style="Status.TLabel")
         self.status_label.pack(pady=20)
         
@@ -169,6 +144,19 @@ class TimeTracker:
         self.summary_btn.pack(pady=20)
         
         self.update_button_states()
+    
+    def show_time_goal_dialog(self, event=None):
+        """Show dialog to change time goal"""
+        if self.core.current_state == "clocked_out":
+            current_hours = self.core.get_time_goal_hours()
+            dialog = TimeGoalDialog(self.root, current_hours)
+            self.root.wait_window(dialog.dialog)
+            
+            if dialog.result is not None:
+                if self.core.set_time_goal(dialog.result):
+                    self.time_left_label.config(
+                        text=f"{self.core.format_timedelta(self.core.total_time)} left"
+                    )
     
     def setup_buttons(self, button_frame):
         """Setup the control buttons"""
@@ -196,117 +184,86 @@ class TimeTracker:
     
     def update_time_display(self):
         """Update the time display and countdown"""
-        if self.current_state in ["clocked_in", "break"]:
-            current_time = self.get_current_time()
-            
-            if self.current_state == "clocked_in":
-                worked_time = current_time - self.clock_in_time - self.total_break_time
-                # Only countdown when not on break
-                if self.current_state != "break":
-                    self.hours_left -= timedelta(seconds=1)
-            else:  # On break
-                worked_time = current_time - self.clock_in_time - self.total_break_time - (current_time - self.break_start_time)
-            
-            self.time_label.config(text=self.format_timedelta(worked_time))
-            self.hours_left_label.config(text=f"{self.format_timedelta(self.hours_left)} left")
-            
-            # Save state periodically
-            self.save_data()
+        worked_time, time_left = self.core.calculate_current_times()
+        
+        self.time_label.config(text=self.core.format_timedelta(worked_time))
+        self.time_left_label.config(text=f"{self.core.format_timedelta(time_left)} left")
+        
+        # Update status label
+        self.status_label.config(text=f"Status: {self.core.current_state.replace('_', ' ').title()}")
         
         # Schedule next update
         self.root.after(1000, self.update_time_display)
     
     def update_button_states(self):
         """Update button states based on current state"""
-        states = {
-            "clocked_out": {
-                "clock_in": "normal",
-                "clock_out": "disabled",
-                "break_in": "disabled",
-                "break_out": "disabled"
-            },
-            "clocked_in": {
-                "clock_in": "disabled",
-                "clock_out": "normal",
-                "break_in": "normal",
-                "break_out": "disabled"
-            },
-            "break": {
-                "clock_in": "disabled",
-                "clock_out": "disabled",
-                "break_in": "disabled",
-                "break_out": "normal"
-            }
-        }
+        current_state = self.core.current_state
         
-        current_states = states[self.current_state]
-        self.clock_in_btn["state"] = current_states["clock_in"]
-        self.clock_out_btn["state"] = current_states["clock_out"]
-        self.break_in_btn["state"] = current_states["break_in"]
-        self.break_out_btn["state"] = current_states["break_out"]
+        # Reset all buttons to disabled first
+        self.clock_in_btn["state"] = "disabled"
+        self.clock_out_btn["state"] = "disabled"
+        self.break_in_btn["state"] = "disabled"
+        self.break_out_btn["state"] = "disabled"
+        
+        # Enable buttons based on current state
+        if current_state == "clocked_out":
+            self.clock_in_btn["state"] = "normal"
+        elif current_state == "clocked_in":
+            self.clock_out_btn["state"] = "normal"
+            self.break_in_btn["state"] = "normal"
+        elif current_state == "break":
+            self.break_out_btn["state"] = "normal"
     
     def clock_in(self):
         """Handle clock in event"""
-        self.current_state = "clocked_in"
-        self.clock_in_time = self.get_current_time()
-        self.total_break_time = timedelta()
-        self.hours_left = timedelta(hours=16)  # Reset countdown
-        self.status_label.config(text="Status: Locked In")
-        self.update_button_states()
-        self.save_data()
+        if self.core.clock_in():
+            self.status_label.config(text="Status: Locked In")
+            self.update_button_states()
     
     def clock_out(self):
-        """Handle clock out event"""
-        if self.clock_in_time:
-            current_time = self.get_current_time()
-            worked_time = current_time - self.clock_in_time - self.total_break_time
-            
-            # Save to records
-            date_str = current_time.strftime("%Y-%m-%d")
-            self.time_records[date_str] = {
-                "total_time": self.format_timedelta(worked_time),
-                "breaks": self.format_timedelta(self.total_break_time),
-                "clock_in": self.clock_in_time.strftime("%H:%M"),
-                "clock_out": current_time.strftime("%H:%M")
-            }
+        """Handle clock out event with confirmation"""
+        dialog = ConfirmationDialog(self.root)
+        self.root.wait_window(dialog.dialog)
         
-        # Reset state
-        self.current_state = "clocked_out"
-        self.clock_in_time = None
-        self.total_break_time = timedelta()
-        self.status_label.config(text="Status: Locked Out")
-        self.time_label.config(text="0h 0m")
-        self.hours_left_label.config(text="16h 0m left")
-        self.update_button_states()
-        self.save_data()
+        if dialog.result:
+            if self.core.clock_out():
+                self.status_label.config(text="Status: Locked Out")
+                self.time_label.config(text="0h 0m 0s")
+                self.time_left_label.config(
+                    text=f"{self.core.format_timedelta(self.core.total_time)} left"
+                )
+                self.update_button_states()
     
     def break_in(self):
         """Handle break start event"""
-        self.current_state = "break"
-        self.break_start_time = self.get_current_time()
-        self.status_label.config(text="Status: On Break")
-        self.update_button_states()
-        self.save_data()
+        if self.core.break_in():
+            self.status_label.config(text="Status: On Break")
+            self.update_button_states()
     
     def break_out(self):
         """Handle break end event"""
-        if self.break_start_time:
-            current_time = self.get_current_time()
-            self.total_break_time += current_time - self.break_start_time
-        
-        self.current_state = "clocked_in"
-        self.break_start_time = None
-        self.status_label.config(text="Status: Locked In")
-        self.update_button_states()
-        self.save_data()
+        if self.core.break_out():
+            self.status_label.config(text="Status: Locked In")
+            self.update_button_states()
     
     def show_weekly_summary(self):
         """Show weekly summary window"""
-        WeeklySummaryWindow(self.root, self.time_records, self.get_current_time)
+        WeeklySummaryWindow(self.root, self.core.get_records(), self.core.get_current_time)
+    
+    def toggle_dark_mode(self):
+        """Toggle between light and dark mode"""
+        self.dark_mode = not self.dark_mode
+        StyleManager.toggle_dark_mode(self.dark_mode)
+        
+        # Update button text
+        self.dark_mode_button.config(text="Light Mode" if self.dark_mode else "Dark Mode")
+        
+        # Update background of the root window
+        self.root.configure(bg='#2d2d2d' if self.dark_mode else 'white')
     
     def on_closing(self):
         """Handle window closing event"""
-        self.save_data()
+        self.core.save_data()
         self.root.destroy()
     
     def run(self):
